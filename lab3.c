@@ -36,7 +36,7 @@
 #define F_CK (50 * 1000 * 1000)
 
 // baud rate
-#define BAUD_RATE 2400
+#define BAUD_RATE 115200
 
 // UART device 0 base
 #define UART_0_BASE 0x8001060
@@ -122,6 +122,21 @@ void dump_uart(void) {
     printf("\n");
 }
 
+void dump_status(int status) {
+    printf("\nSTATUS:\n");
+    printf("  PARITY_ERROR:      %d\n", !!(status & UART_STATUS_PARITY_ERROR));
+    printf("  FRAME_ERROR:       %d\n", !!(status & UART_STATUS_FRAME_ERROR));
+    printf("  BREAK_ERROR:       %d\n", !!(status & UART_STATUS_BREAK_ERROR));
+    printf("  RX_OVERFLOW_ERROR: %d\n", !!(status & UART_STATUS_RX_OVERFLOW_ERROR));
+    printf("  TX_OVERFLOW_ERROR: %d\n", !!(status & UART_STATUS_TX_OVERFLOW_ERROR));
+    printf("  TX_EMPTY:          %d\n", !!(status & UART_STATUS_TX_EMPTY));
+    printf("  TX_READY:          %d\n", !!(status & UART_STATUS_TX_READY));
+    printf("  RX_READY:          %d\n", !!(status & UART_STATUS_RX_READY));
+    printf("  ERROR:             %d\n", !!(status & UART_STATUS_ERROR));
+
+    printf("\n");
+}
+
 #if PROJECT == 1
 
 /*
@@ -165,10 +180,15 @@ int main(void) {
 // number of consecutive characters
 #define NUM_CHARS 3
 
-// decides if the program waits until ready between each transmit 
-#define POLL_CHARS 1
+// decides if the program waits until ready between each transmit
+#define POLL_CHARS 0
 
 int main(void) {
+	DBG_LO();
+
+	// clear status
+    WRITE_REG(UART_0_BASE, UART_STATUS, 0);
+
     // array for status
     int status_arr[2];
 
@@ -176,7 +196,7 @@ int main(void) {
     int divisor = DIVISOR(F_CK, BAUD_RATE);
     WRITE_REG(UART_0_BASE, UART_DIVISOR, divisor);
 
-    // wait until ready 
+    // wait until ready
     while (!(READ_REG(UART_0_BASE, UART_STATUS, 9) & UART_STATUS_TX_READY))
         ;
 
@@ -184,9 +204,11 @@ int main(void) {
     char c = 'a';
     status_arr[0] = READ_REG(UART_0_BASE, UART_STATUS, 9);
     for (int i = 0; i < NUM_CHARS; i++) {
+    	DBG_HI();
         WRITE_REG(UART_0_BASE, UART_TXDATA, c++);
+    	DBG_LO();
 
-        // wait until ready 
+        // wait until ready
         if (POLL_CHARS && (i != NUM_CHARS - 1)) {
             while (!(READ_REG(UART_0_BASE, UART_STATUS, 9) & UART_STATUS_TX_READY))
                 ;
@@ -196,7 +218,9 @@ int main(void) {
     status_arr[1] = READ_REG(UART_0_BASE, UART_STATUS, 9);
 
     printf("STATUS BEFORE [0x%02X]: 0x%04X\n", UART_STATUS, status_arr[0]);
+    dump_status(status_arr[0]);
     printf("STATUS AFTER [0x%02X]: 0x%04X\n", UART_STATUS, status_arr[1]);
+    dump_status(status_arr[1]);
 
     return 0;
 }
@@ -207,10 +231,19 @@ int main(void) {
     "My name is what? My name is who? My name is - chika chika - Slim Shady"
 
 int main(void) {
+	DBG_LO();
+
     char str[] = TEST_STRING;
     char *c = str;
 
-    // start timer 
+	// clear status
+    WRITE_REG(UART_0_BASE, UART_STATUS, 0);
+
+    // configure baud rate
+    int divisor = DIVISOR(F_CK, BAUD_RATE);
+    WRITE_REG(UART_0_BASE, UART_DIVISOR, divisor);
+
+    // start timer
     alt_timestamp_start();
     alt_u32 t_start = (alt_u32)alt_timestamp();
     DBG_HI();
@@ -241,35 +274,36 @@ int main(void) {
 
 #elif PROJECT == 5
 
-// decides if the program waits until ready between each transmit 
+// decides if the program waits until ready between each transmit
 #define POLL_CHARS 1
 
 // character echo on STDOUT delay
-#define DELAY_MS 5
+#define DELAY_MS 0
+
+// added to correct DIVISOR value
+#define DIVISOR_SKEW 65
 
 int main(void) {
+	DBG_LO();
+
     // clear interrupts (might not be needed)
     WRITE_REG(UART_0_BASE, UART_CONTROL, 0x00);
+
+	// clear status
+    WRITE_REG(UART_0_BASE, UART_STATUS, 0);
+
+    // configure baud rate
+    int divisor = DIVISOR(F_CK, BAUD_RATE) + DIVISOR_SKEW;
+    WRITE_REG(UART_0_BASE, UART_DIVISOR, divisor);
 
     // array for status
     int status_arr[2];
 
-    // start timer 
+    // start timer
     alt_timestamp_start();
 
-    // get test chars 
+    // get test chars
     for (;;) {
-        // wait until ready
-        if (POLL_CHARS) {
-            while (!(READ_REG(UART_0_BASE, UART_STATUS, 9) & UART_STATUS_RX_READY))
-                ;
-        }
-
-        // get char from RX
-        status_arr[0] = READ_REG(UART_0_BASE, UART_STATUS, 9);
-        char c = READ_REG(UART_0_BASE, UART_RXDATA, 8);
-        status_arr[1] = READ_REG(UART_0_BASE, UART_STATUS, 9);
-
         int status = READ_REG(UART_0_BASE, UART_STATUS, 9);
 
         // clear RX overflow error bit if set
@@ -282,6 +316,19 @@ int main(void) {
             WRITE_REG(UART_0_BASE, UART_STATUS, 0);
         }
 
+        // wait until ready
+        if (POLL_CHARS) {
+            while (!(READ_REG(UART_0_BASE, UART_STATUS, 9) & UART_STATUS_RX_READY))
+                ;
+        }
+
+        // get char from RX
+        DBG_HI();
+
+        status_arr[0] = READ_REG(UART_0_BASE, UART_STATUS, 9);
+        char c = READ_REG(UART_0_BASE, UART_RXDATA, 8);
+        status_arr[1] = READ_REG(UART_0_BASE, UART_STATUS, 9);
+
         // start delay
         if (DELAY_MS > 0) {
             alt_u32 t_start = (alt_u32)alt_timestamp();
@@ -293,8 +340,12 @@ int main(void) {
                 ;
         }
 
+
+    	DBG_LO();
+
         printf("STATUS BEFORE [0x%02X]: 0x%04X\n", UART_STATUS, status_arr[0]);
         printf("STATUS AFTER [0x%02X]: 0x%04X\n", UART_STATUS, status_arr[1]);
+        if(status_arr[1] & UART_STATUS_PARITY_ERROR) printf("Parity error detected\n");
         printf("Received character: %c\n", c);
     }
 
@@ -310,24 +361,34 @@ int main(void) {
     // clear interrupts (might not be needed)
     WRITE_REG(UART_0_BASE, UART_CONTROL, 0x00);
 
+	// clear status
+    WRITE_REG(UART_0_BASE, UART_STATUS, 0);
+
+    // configure baud rate
+    int divisor = DIVISOR(F_CK, BAUD_RATE);
+    WRITE_REG(UART_0_BASE, UART_DIVISOR, divisor);
+
     // setup buffer
-    char s[BUF_SIZE] = {0}; // will be NULL terminated no matter what
+    char s[BUF_SIZE];
+    for(;;) {
+    	memset(s, 0, BUF_SIZE); // will be NULL terminated no matter what
 
-    // get test chars 
-    for (int i = 0; i < BUF_SIZE - 1; i++) {
-        // wait until ready
-        while (!(READ_REG(UART_0_BASE, UART_STATUS, 9) & UART_STATUS_RX_READY))
-            ;
+        // get test chars
+        for (int i = 0; i < BUF_SIZE - 1; i++) {
+            // wait until ready
+            while (!(READ_REG(UART_0_BASE, UART_STATUS, 9) & UART_STATUS_RX_READY))
+                ;
 
-        // get char from RX
-        s[i] = READ_REG(UART_0_BASE, UART_RXDATA, 8);
+            // get char from RX
+            s[i] = READ_REG(UART_0_BASE, UART_RXDATA, 8);
 
-        if (s[i] == '\0' || s[i] == '\n' || s[i] == '\r') {
-            break;
+            if (s[i] == '\0' || s[i] == '\n' || s[i] == '\r') {
+                break;
+            }
         }
-    }
 
-    printf("Received string: %s\n", s);
+        printf("Received string: %s\n", s);
+    }
 
     return 0;
 }
